@@ -3,17 +3,22 @@ package main
 import (
 	"context"
 	"fmt"
-	"goGrpc/greet/greetpb"
+	"google.golang.org/grpc/reflection"
 	"io"
 	"log"
 	"net"
 	"strconv"
 	"time"
 
+	"goGrpc/greet/greetpb"
+
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
-type server struct {}
+type server struct{}
 
 func (*server) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	fmt.Printf("Greet function was invoke with %v \n", req)
@@ -75,13 +80,48 @@ func (*server) GreetEveryone(stream greetpb.GreetService_GreetEveryoneServer) er
 	}
 }
 
+func (*server) GreetWithDeadline(ctx context.Context, req *greetpb.GreetWithDeadlineRequest) (*greetpb.GreetWithDeadlineResponse, error) {
+	fmt.Printf("GreetWithDeadline function was invoke with %v \n", req)
+	for i := 0; i < 3; i++ {
+		if ctx.Err() == context.Canceled {
+			fmt.Println("The client canceled the request")
+			return nil, status.Error(codes.Canceled, "the client canceled the request")
+		}
+		time.Sleep(1 * time.Second)
+	}
+	firstName := req.GetGreeting().GetFirstName()
+	result := "hello " + firstName
+	res := &greetpb.GreetWithDeadlineResponse{Result: result}
+	return res, nil
+}
+
 func main() {
 	fmt.Println("gRPC server is getting started...")
+
 	lis, err := net.Listen("tcp", "0.0.0.0:50051")
 	if err != nil {
 		log.Fatalln("Failed to listen: %w", err)
 	}
-	s := grpc.NewServer()
+
+	opts := []grpc.ServerOption{}
+	tls := false
+
+	if tls {
+		certFile := "ssl/server.crt"
+		keyFile := "ssl/server.pem"
+		creds, sslErr := credentials.NewServerTLSFromFile(certFile, keyFile)
+		if sslErr != nil {
+			log.Fatalf("Failed loading certificates: %v", sslErr)
+			return
+		}
+
+		opts = append(opts, grpc.Creds(creds))
+	}
+
+	s := grpc.NewServer(opts...)
+
+	reflection.Register(s)
+
 	greetpb.RegisterGreetServiceServer(s, &server{})
 	if err := s.Serve(lis); err != nil {
 		log.Fatalln("Failed to serve: %w", err)

@@ -3,27 +3,49 @@ package main
 import (
 	"context"
 	"fmt"
-	"goGrpc/greet/greetpb"
-	"google.golang.org/grpc"
 	"io"
 	"log"
 	"sync"
 	"time"
+
+	"goGrpc/greet/greetpb"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
 func main() {
 	fmt.Println("Hello from client")
-	cc, err := grpc.Dial("localhost:50051", grpc.WithInsecure())
+
+	tls := true
+	opts := grpc.WithInsecure()
+
+	if tls {
+		certFile := "ssl/ca.crt"  // CA trust certificate
+		creds, sslErr := credentials.NewClientTLSFromFile(certFile, "")
+		if sslErr != nil {
+			log.Fatalf("Error while loaoding CA trust certificate: %v", sslErr)
+			return
+		}
+		opts = grpc.WithTransportCredentials(creds)
+	}
+
+	cc, err := grpc.Dial("localhost:50051", opts)
+
 	if err != nil {
-		log.Fatalln("could not connect: %w", err)
+		log.Fatalf("could not connect: %v", err)
 	}
 	defer cc.Close()
 
 	c := greetpb.NewGreetServiceClient(cc)
-	//doUnary(c)
+	doUnary(c)
 	//doServerStreaming(c)
 	//doClientStreaming(c)
-	doBiDirectionalStreaming(c)
+	//doBiDirectionalStreaming(c)
+	//doUnaryWithDeadline(c, 1*time.Second)  // should complete
+	//doUnaryWithDeadline(c, 5*time.Second)  // should timeout
 }
 
 func doUnary(c greetpb.GreetServiceClient) {
@@ -173,4 +195,32 @@ func doBiDirectionalStreaming(c greetpb.GreetServiceClient) {
 		}
 	}()
 	wg.Wait()
+}
+
+func doUnaryWithDeadline(c greetpb.GreetServiceClient, timeout time.Duration) {
+	fmt.Println("Starting to do a UnaryWithDeadline RPC...")
+	req := &greetpb.GreetWithDeadlineRequest{
+		Greeting: &greetpb.Greeting{
+			FirstName: "Andrew",
+			LastName:  "Yang",
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	res, err := c.GreetWithDeadline(ctx, req)
+	if err != nil {
+		statusErr, ok := status.FromError(err)
+		if ok {
+			if statusErr.Code() == codes.DeadlineExceeded {
+				fmt.Println("Timeout was hit! Deadline was exceeded")
+			} else {
+				fmt.Printf("unexpected error: %v \n", statusErr)
+			}
+		} else {
+			log.Fatalln("error while calling UnaryWithDeadline RPC: %w", err)
+		}
+		return
+	}
+	fmt.Printf("Response from UnaryWithDeadline: %v \n", res.GetResult())
 }
